@@ -1,0 +1,7 @@
+[paths]
+music_dir = "~/Ambient/replay"
+db_path = "warehouse.db"
+csv_path = "tracks.csv"
+
+[youtube]
+playlist_url = "https://music.youtube.com/playlist?list=RDTMAK5uy_nilrsVWxrKskY0ZUpVZ3zpB0u4LwWTVJ4"
