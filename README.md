@@ -26,18 +26,16 @@ This project treats Replay Mix as a signal for what I listen to often and builds
 ## How it works
 
 ```
-```
 YouTube Music Replay Mix
 ↓
 yt-dlp (authenticated)
 ↓
 Python script
-
 * Insert new tracks into SQLite
 * Check which files exist locally
-* Download missing audio
-  ↓
-  Local music folder + CSV export
+* Download missing audio to local music folder
+* CSV export
+```
 
 ## Tech used
 
