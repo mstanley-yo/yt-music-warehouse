@@ -25,17 +25,11 @@ This project treats Replay Mix as a signal for what I listen to often and builds
 
 ## How it works
 
-```
-YouTube Music Replay Mix
-↓
-yt-dlp (authenticated)
-↓
-Python script
-* Insert new tracks into SQLite
-* Check which files exist locally
-* Download missing audio to local music folder
-* CSV export
-```
+YT Music Replay Mix → yt-dlp (authenticated) → Python script, which:
+* Inserts new tracks and metadata into SQLite
+* Checks which files exist locally
+* Downloads missing audio and thumbnails to local music folder
+* Exports to csv
 
 ## Tech used
 
@@ -43,6 +37,7 @@ Python script
 - SQLite (`sqlite3`)
 - `yt-dlp`
 - `ffmpeg`
+- `mutagen` (used to embed thumbnails by yt-dlp)
 
 ## Authentication note
 
@@ -67,9 +62,10 @@ This will:
 
 ## Output
 
-* Downloaded music files live in `~/Ambient/replay/`
+* Downloaded music files live in `~/Ambient/replay/` (in my example)
 * Metadata is stored in `warehouse.db`
 * A CSV snapshot is written to `tracks.csv`
+* Play music using a music player of choice (I like `kew`)
 
 ## Notes
 
