@@ -35,9 +35,16 @@ def init_db():
             title TEXT NOT NULL,
             youtube_url TEXT UNIQUE NOT NULL,
             available INTEGER NOT NULL DEFAULT 0,
+
+            -- Bookkeeping 
             date_added TEXT NOT NULL,
             last_seen TEXT,
-            seen_days INTEGER NOT NULL DEFAULT 0
+            seen_days INTEGER NOT NULL DEFAULT 0,
+
+            -- Metadata
+            upload_date TEXT,
+            duration INTEGER,
+            channel TEXT
         )
         """)
 
@@ -64,6 +71,49 @@ def insert_tracks(entries):
             WHERE youtube_url = ?
                 AND (last_seen IS NULL OR last_seen <> ?)
             """, (today, url, today))
+
+def fetch_video_metadata(url):
+    cmd = [
+        "yt-dlp",
+        "--cookies-from-browser", "chrome",
+        "--dump-json",
+        url
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
+    return json.loads(result.stdout)
+
+def update_metadata():
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("""
+            SELECT youtube_url
+            FROM tracks
+            WHERE upload_date IS NULL
+        """).fetchall()
+
+    for (url,) in rows:
+        try:
+            meta = fetch_video_metadata(url)
+        except Exception as e:
+            print(f"Metadata fetch failed: {url} ({e})")
+            continue
+
+        upload_date = meta.get("upload_date")
+        upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+        duration = meta.get("duration")
+        channel = meta.get("channel")
+        print(upload_date, duration, channel)
+
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("""
+                UPDATE tracks
+                SET
+                    upload_date = ?,
+                    duration = ?,
+                    channel = ?
+                WHERE youtube_url = ?
+                    AND upload_date IS NULL
+                """, (upload_date, duration, channel, url)
+            )
 
 def update_availability():
     ids_on_disk = set()
@@ -97,10 +147,17 @@ def download_missing():
             "-x",
             "--audio-format", "mp3",
             "--embed-metadata",
+            "--embed-thumbnail",
+            "--convert-thumbnails", "jpg",
             "-o", f"{MUSIC_DIR}/%(title)s [%(id)s].%(ext)s",
             url
         ]
-        subprocess.run(cmd, check=True)
+
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Download failed: {url} ({e})")
+            continue
 
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
@@ -130,6 +187,9 @@ def main():
     print("Getting entries from replay playlist")
     entries = fetch_playlist_entries(PLAYLIST_URL)
     insert_tracks(entries)
+
+    print("Updating metadata")
+    update_metadata()
 
     print("Downloading missing files")
     update_availability()
