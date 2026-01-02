@@ -2,6 +2,7 @@
 music_dir = "~/Ambient/replay"
 db_path = "warehouse.db"
 csv_path = "tracks.csv"
+last_run_path = "log/last_run.log"
 
 [youtube]
 playlist_url = "https://www.youtube.com/playlist?list=RDTMAK5uy_nilrsVWxrKskY0ZUpVZ3zpB0u4LwWTVJ4"

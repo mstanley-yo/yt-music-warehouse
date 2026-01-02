@@ -1,6 +1,6 @@
 import subprocess
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 import tempfile
@@ -16,6 +16,17 @@ MUSIC_DIR = Path(config["paths"]["music_dir"]).expanduser()
 DB_PATH = Path(config["paths"]["db_path"])
 CSV_PATH = Path(config["paths"]["csv_path"])
 PLAYLIST_URL = config["youtube"]["playlist_url"]
+LAST_RUN_PATH = Path(config["paths"]["last_run_path"])
+
+def run_today():
+    if LAST_RUN_PATH.exists():
+        last_run = LAST_RUN_PATH.read_text().strip()
+        return last_run == date.today().isoformat()
+    return False
+
+def mark_run_complete():
+    with open(LAST_RUN_PATH, "w") as p:
+        p.write(date.today().isoformat())
 
 def fetch_playlist_entries(PLAYLIST_URL):
     cmd = [
@@ -190,22 +201,30 @@ def update_csv():
         writer.writerows(rows)
 
 def main():
-    print("Initialising database")
+    print(f"🎵 Running music_warehouse at {datetime.now().isoformat()}")
+    if run_today():
+       print(f"✅ music_warehouse already ran today; skipping.\n")
+       return 
+
+    print("🗄️ Initialising database")
     init_db()
 
-    print("Getting entries from replay playlist")
+    print("👀 Getting entries from replay playlist")
     entries = fetch_playlist_entries(PLAYLIST_URL)
     insert_tracks(entries)
 
-    print("Updating metadata")
+    print("🏷️ Updating metadata")
     update_metadata()
 
-    print("Downloading missing files")
+    print("📥 Downloading missing files")
     update_availability()
     download_missing()
 
-    print("Writing to .csv")
+    print("📊 Writing to .csv")
     update_csv()
+
+    mark_run_complete()
+    print("✅ music_warehouse run completed successfully\n")
 
 if __name__ == "__main__":
     main()
