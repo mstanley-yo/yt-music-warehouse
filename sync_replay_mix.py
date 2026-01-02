@@ -1,6 +1,6 @@
 import subprocess
 import sqlite3
-from datetime import datetime
+from datetime import date
 import json
 from pathlib import Path
 import csv
@@ -35,22 +35,35 @@ def init_db():
             title TEXT NOT NULL,
             youtube_url TEXT UNIQUE NOT NULL,
             available INTEGER NOT NULL DEFAULT 0,
-            date_added TEXT NOT NULL
+            date_added TEXT NOT NULL,
+            last_seen TEXT,
+            seen_days INTEGER NOT NULL DEFAULT 0
         )
         """)
 
 def insert_tracks(entries):
-    now = datetime.now().isoformat()
+    today = date.today().isoformat()
     with sqlite3.connect(DB_PATH) as conn:
         for e in entries:
             title = e.get("title")
             video_id = e.get("id")
             url = f"https://www.youtube.com/watch?v={video_id}"
 
+            # Insert if new
             conn.execute("""
             INSERT OR IGNORE INTO tracks (title, youtube_url, date_added)
             VALUES (?, ?, ?)
-            """, (title, url, now))
+            """, (title, url, today))
+
+            # Update last_seen and increment seen_days ONLY if day changed
+            conn.execute("""
+            UPDATE tracks
+            SET
+                seen_days = seen_days + 1,
+                last_seen = ?
+            WHERE youtube_url = ?
+                AND (last_seen IS NULL OR last_seen <> ?)
+            """, (today, url, today))
 
 def update_availability():
     ids_on_disk = set()
@@ -98,18 +111,13 @@ def download_missing():
 def update_csv():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.execute("""
-            SELECT
-                id,
-                title,
-                youtube_url,
-                available,
-                date_added
+            SELECT *
             FROM tracks
-            ORDER BY date_added
+            ORDER BY last_seen
         """)
         rows = cursor.fetchall()
         headers = [desc[0] for desc in cursor.description]
-
+    
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
