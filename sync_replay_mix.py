@@ -44,9 +44,8 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS tracks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            youtube_url TEXT PRIMARY KEY,
             title TEXT NOT NULL,
-            youtube_url TEXT UNIQUE NOT NULL,
             available INTEGER NOT NULL DEFAULT 0,
 
             -- Bookkeeping 
@@ -136,25 +135,25 @@ def update_availability():
             ids_on_disk.add(m.group(1))
 
     with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT id, youtube_url FROM tracks").fetchall()
+        rows = conn.execute("SELECT youtube_url FROM tracks").fetchall()
 
-        for track_id, url in rows:
+        for url, in rows:
             video_id = url.split("v=")[-1].split("&")[0]
             available = int(video_id in ids_on_disk)
 
             conn.execute(
-                "UPDATE tracks SET available = ? WHERE id = ?",
-                (available, track_id)
+                "UPDATE tracks SET available = ? WHERE youtube_url = ?",
+                (available, url)
             )
 
 def download_missing():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("""
-        SELECT id, youtube_url FROM tracks
+        SELECT youtube_url FROM tracks
         WHERE available = 0
         """).fetchall()
 
-    for track_id, url in rows:
+    for url in rows:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             cmd = [
@@ -182,8 +181,8 @@ def download_missing():
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("""
                 UPDATE tracks SET available = 1
-                WHERE id = ?
-                """, (track_id,))
+                WHERE youtube_url = ?
+                """, (url,))
 
 def update_csv():
     with sqlite3.connect(DB_PATH) as conn:
