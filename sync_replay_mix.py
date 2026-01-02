@@ -3,6 +3,8 @@ import sqlite3
 from datetime import date
 import json
 from pathlib import Path
+import tempfile
+import shutil
 import csv
 import re
 import tomllib
@@ -117,7 +119,7 @@ def update_metadata():
 
 def update_availability():
     ids_on_disk = set()
-    for p in MUSIC_DIR.glob("*.mp3"):
+    for p in MUSIC_DIR.iterdir():
         m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
         if m:
             ids_on_disk.add(m.group(1))
@@ -142,28 +144,35 @@ def download_missing():
         """).fetchall()
 
     for track_id, url in rows:
-        cmd = [
-            "yt-dlp",
-            "-x",
-            "--audio-format", "mp3",
-            "--embed-metadata",
-            "--embed-thumbnail",
-            "--convert-thumbnails", "jpg",
-            "-o", f"{MUSIC_DIR}/%(title)s [%(id)s].%(ext)s",
-            url
-        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            cmd = [
+                "yt-dlp",
+                "-f", "bestaudio[ext=m4a]/bestaudio",
+                "--audio-format", "m4a",
+                "--postprocessor-args", 
+                "ffmpeg:-c:a aac -b:a 256k",
+                "--embed-metadata",
+                "--embed-thumbnail",
+                "-o", str(tmpdir / "%(title)s [%(id)s].%(ext)s"),
+                url
+            ]
 
-        try:
-            subprocess.run(cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Download failed: {url} ({e})")
-            continue
+            try:
+                subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"Download failed: {url} ({e})")
+                continue
 
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
-            UPDATE tracks SET available = 1
-            WHERE id = ?
-            """, (track_id,))
+            # Move successful outputs to MUSIC_DIR
+            for file in tmpdir.iterdir():
+                shutil.move(str(file), MUSIC_DIR)
+
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("""
+                UPDATE tracks SET available = 1
+                WHERE id = ?
+                """, (track_id,))
 
 def update_csv():
     with sqlite3.connect(DB_PATH) as conn:
