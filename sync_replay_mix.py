@@ -137,7 +137,7 @@ def update_availability():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT youtube_url FROM tracks").fetchall()
 
-        for url, in rows:
+        for (url,) in rows:
             video_id = url.split("v=")[-1].split("&")[0]
             available = int(video_id in ids_on_disk)
 
@@ -153,7 +153,7 @@ def download_missing():
         WHERE available = 0
         """).fetchall()
 
-    for url in rows:
+    for (url,) in rows:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             cmd = [
