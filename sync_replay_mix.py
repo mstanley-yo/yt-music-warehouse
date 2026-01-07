@@ -284,13 +284,7 @@ def archive_track(title):
             print(f"Failed to archive {track_title}: {e}")
             return False
 
-parser = argparse.ArgumentParser(description = "Sync YT Music Replay Mix")
-parser.add_argument(
-    "-a", "--archive", type = str, help = "Title of track to archive"
-)
-args = parser.parse_args()
-
-def main():
+def main(args):
     if (title := args.archive):
         archive_track(title)
         return
@@ -316,4 +310,9 @@ def main():
     print("✅ music_warehouse run completed successfully\n")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description = "Sync YT Music Replay Mix")
+    parser.add_argument(
+        "-a", "--archive", type = str, help = "Title of track to archive"
+    )
+    args = parser.parse_args()
+    main(args)
