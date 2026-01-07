@@ -8,15 +8,19 @@ import shutil
 import csv
 import re
 import tomllib
+import argparse
 
 with open("config.toml", "rb") as f:
     config = tomllib.load(f)
 
 MUSIC_DIR = Path(config["paths"]["music_dir"]).expanduser()
+ARCHIVE_DIR = Path(config["paths"]["archive_dir"]).expanduser()
 DB_PATH = Path(config["paths"]["db_path"])
 CSV_PATH = Path(config["paths"]["csv_path"])
 PLAYLIST_URL = config["youtube"]["playlist_url"]
 LAST_RUN_PATH = Path(config["paths"]["last_run_path"])
+ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
 def run_today():
     if LAST_RUN_PATH.exists():
@@ -47,11 +51,13 @@ def init_db():
             youtube_url TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             available INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
 
             -- Bookkeeping 
             date_added TEXT NOT NULL,
             last_seen TEXT,
             seen_days INTEGER NOT NULL DEFAULT 0,
+            date_archived TEXT,
 
             -- Metadata
             upload_date TEXT,
@@ -133,24 +139,31 @@ def update_availability():
         m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
         if m:
             ids_on_disk.add(m.group(1))
+    
+    ids_archived = set()
+    for p in ARCHIVE_DIR.iterdir():
+        m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
+        if m:
+            ids_archived.add(m.group(1))
 
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT youtube_url FROM tracks").fetchall()
-
         for (url,) in rows:
             video_id = url.split("v=")[-1].split("&")[0]
             available = int(video_id in ids_on_disk)
-
+            archived = int(video_id in ids_archived)
             conn.execute(
-                "UPDATE tracks SET available = ? WHERE youtube_url = ?",
-                (available, url)
+                """
+                UPDATE tracks SET available = ?, archived = ?
+                WHERE youtube_url = ?
+                """, (available, archived, url)
             )
 
 def download_missing():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("""
         SELECT youtube_url FROM tracks
-        WHERE available = 0
+        WHERE available = 0 AND archived = 0
         """).fetchall()
 
     for (url,) in rows:
@@ -199,7 +212,70 @@ def update_csv():
         writer.writerow(headers)
         writer.writerows(rows)
 
+def archive_track(title):
+    """Takes a title, searches for the track, then moves it to archive"""
+    today = date.today().isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        # Search for track by title (case-insensitive partial match)
+        cursor = conn.execute(
+            """
+            SELECT youtube_url, title
+            FROM tracks
+            WHERE title LIKE ? AND available = 1 AND archived = 0
+            """, (f"%{title}%",)
+        )
+        results = cursor.fetchall()
+        if len(results) == 0:
+            print(f"No available tracks found matching: {title}")
+            return False
+        if len(results) > 1:
+            print(f"Multiple tracks found matching '{title}':")
+            for i, (url, track_title) in enumerate(results, 1):
+                print(f"  {i}. {track_title}")
+            print("Please be more specific.")
+            return False
+
+        url, track_title = results[0]
+        video_id = url.split("v=")[-1].split("&")[0]
+        matching_files = list(MUSIC_DIR.glob(f"*{video_id}*"))
+        if not matching_files:
+            print(f"File not found for: {track_title}")
+            return False
+        
+        # Move file to archive
+        source_file = matching_files[0]
+        dest_file = ARCHIVE_DIR / source_file.name
+        
+        try:
+            shutil.move(str(source_file), str(dest_file))
+            print(f"Archived: {track_title}")
+            
+            # Update database
+            conn.execute(
+                """
+                UPDATE tracks
+                SET available = 0, archived = 1, date_archived = ?
+                WHERE youtube_url = ?
+                """, (today, url)
+            )
+            
+            return True
+            
+        except Exception as e:
+            print(f"Failed to archive {track_title}: {e}")
+            return False
+
+parser = argparse.ArgumentParser(description = "Sync YT Music Replay Mix")
+parser.add_argument(
+    "-a", "--archive", type = str, help = "Title of track to archive"
+)
+args = parser.parse_args()
+
 def main():
+    if (title := args.archive):
+        archive_track(title)
+        return
+
     print(f"🎵 Running music_warehouse at {datetime.now().isoformat()}")
     if run_today():
        print(f"✅ music_warehouse already ran today; skipping.\n")
@@ -207,21 +283,16 @@ def main():
 
     print("🗄️ Initialising database")
     init_db()
-
     print("👀 Getting entries from replay playlist")
     entries = fetch_playlist_entries(PLAYLIST_URL)
     insert_tracks(entries)
-
     print("🏷️ Updating metadata")
     update_metadata()
-
     print("📥 Downloading missing files")
     update_availability()
     download_missing()
-
     print("📊 Writing to .csv")
     update_csv()
-
     mark_run_complete()
     print("✅ music_warehouse run completed successfully\n")
 

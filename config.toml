@@ -1,5 +1,6 @@
 [paths]
 music_dir = "~/Ambient/replay"
+archive_dir = "~/Ambient/archive"
 db_path = "warehouse.db"
 csv_path = "tracks.csv"
 last_run_path = "log/last_run.log"
