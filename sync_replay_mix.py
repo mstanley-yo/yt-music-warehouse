@@ -21,6 +21,19 @@ PLAYLIST_URL = config["youtube"]["playlist_url"]
 LAST_RUN_PATH = Path(config["paths"]["last_run_path"])
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+SCHEMA = {
+    "youtube_url": "TEXT PRIMARY KEY",
+    "title": "TEXT NOT NULL",
+    "available": "INTEGER NOT NULL DEFAULT 0",
+    "archived": "INTEGER NOT NULL DEFAULT 0",
+    "date_added": "TEXT NOT NULL",
+    "last_seen": "TEXT",
+    "seen_days": "INTEGER NOT NULL DEFAULT 0",
+    "date_archived": "TEXT",
+    "upload_date": "TEXT",
+    "duration": "INTEGER",
+    "channel": "TEXT",
+}
 
 def run_today():
     if LAST_RUN_PATH.exists():
@@ -46,25 +59,25 @@ def fetch_playlist_entries(PLAYLIST_URL):
 
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS tracks (
-            youtube_url TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            available INTEGER NOT NULL DEFAULT 0,
-            archived INTEGER NOT NULL DEFAULT 0,
-
-            -- Bookkeeping 
-            date_added TEXT NOT NULL,
-            last_seen TEXT,
-            seen_days INTEGER NOT NULL DEFAULT 0,
-            date_archived TEXT,
-
-            -- Metadata
-            upload_date TEXT,
-            duration INTEGER,
-            channel TEXT
+        # Build CREATE TABLE statement from schema
+        column_defs = [f"{name} {defi}" for name, defi in SCHEMA.items()]
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS tracks ({','.join(column_defs)})
+            """
         )
-        """)
+
+        # Check if all expected columns exist and add missing ones
+        cursor = conn.execute("PRAGMA table_info(tracks)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        for column_name, column_def in SCHEMA.items():
+            if column_name not in existing_columns:
+                # Skip PRIMARY KEY constraint for ALTER TABLE
+                alter_def = column_def.replace(" PRIMARY KEY", "")
+                print(f"Adding missing column: {column_name}")
+                conn.execute(
+                    f"ALTER TABLE tracks ADD COLUMN {column_name} {alter_def}"
+                )
 
 def insert_tracks(entries):
     today = date.today().isoformat()
@@ -75,20 +88,24 @@ def insert_tracks(entries):
             url = f"https://www.youtube.com/watch?v={video_id}"
 
             # Insert if new
-            conn.execute("""
-            INSERT OR IGNORE INTO tracks (title, youtube_url, date_added)
-            VALUES (?, ?, ?)
-            """, (title, url, today))
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO tracks (title, youtube_url, date_added)
+                VALUES (?, ?, ?)
+                """, (title, url, today)
+            )
 
             # Update last_seen and increment seen_days ONLY if day changed
-            conn.execute("""
-            UPDATE tracks
-            SET
-                seen_days = seen_days + 1,
-                last_seen = ?
-            WHERE youtube_url = ?
-                AND (last_seen IS NULL OR last_seen <> ?)
-            """, (today, url, today))
+            conn.execute(
+                """
+                UPDATE tracks
+                SET
+                    seen_days = seen_days + 1,
+                    last_seen = ?
+                WHERE youtube_url = ?
+                    AND (last_seen IS NULL OR last_seen <> ?)
+                """, (today, url, today)
+            )
 
 def fetch_video_metadata(url):
     cmd = [
@@ -102,11 +119,13 @@ def fetch_video_metadata(url):
 
 def update_metadata():
     with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT youtube_url
             FROM tracks
             WHERE upload_date IS NULL
-        """).fetchall()
+            """
+        ).fetchall()
 
     for (url,) in rows:
         try:
