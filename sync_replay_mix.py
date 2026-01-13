@@ -26,10 +26,12 @@ SCHEMA = {
     "title": "TEXT NOT NULL",
     "available": "INTEGER NOT NULL DEFAULT 0",
     "archived": "INTEGER NOT NULL DEFAULT 0",
+    "deleted": "INTEGER NOT NULL DEFAULT 0",
     "date_added": "TEXT NOT NULL",
     "last_seen": "TEXT",
     "seen_days": "INTEGER NOT NULL DEFAULT 0",
     "date_archived": "TEXT",
+    "date_deleted": "TEXT",
     "upload_date": "TEXT",
     "duration": "INTEGER",
     "channel": "TEXT",
@@ -85,7 +87,7 @@ def insert_tracks(entries):
         for e in entries:
             title = e.get("title")
             video_id = e.get("id")
-            url = f"https://www.youtube.com/watch?v={video_id}"
+            url = id_to_url(video_id)
 
             # Insert if new
             conn.execute(
@@ -118,6 +120,7 @@ def fetch_video_metadata(url):
     return json.loads(result.stdout)
 
 def update_metadata():
+    """Get metadata for tracks that don't have it"""
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             """
@@ -126,22 +129,19 @@ def update_metadata():
             WHERE upload_date IS NULL
             """
         ).fetchall()
-
     for (url,) in rows:
         try:
             meta = fetch_video_metadata(url)
         except Exception as e:
             print(f"Metadata fetch failed: {url} ({e})")
             continue
-
         upload_date = meta.get("upload_date")
         upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
         duration = meta.get("duration")
         channel = meta.get("channel")
-        print(upload_date, duration, channel)
-
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE tracks
                 SET
                     upload_date = ?,
@@ -152,19 +152,28 @@ def update_metadata():
                 """, (upload_date, duration, channel, url)
             )
 
+def title_to_id(title):
+    path = Path(title)
+    match = re.search(r"\[([A-Za-z0-9_-]{11})\]$", path.stem)
+    if not match:
+        return
+    return match.group(1)
+
+def id_to_url(video_id):
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
 def update_availability():
     ids_on_disk = set()
     for p in MUSIC_DIR.iterdir():
-        m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
-        if m:
-            ids_on_disk.add(m.group(1))
-    
+        id = title_to_id(p)
+        if id:
+            ids_on_disk.add(id)
     ids_archived = set()
     for p in ARCHIVE_DIR.iterdir():
-        m = re.search(r"\[([A-Za-z0-9_-]{11})\]$", p.stem)
-        if m:
-            ids_archived.add(m.group(1))
-
+        id = title_to_id(p)
+        if id:
+            ids_archived.add(id)
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("SELECT youtube_url FROM tracks").fetchall()
         for (url,) in rows:
@@ -182,7 +191,7 @@ def download_missing():
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute("""
         SELECT youtube_url FROM tracks
-        WHERE available = 0 AND archived = 0
+        WHERE available = 0 AND archived = 0 AND deleted = 0
         """).fetchall()
 
     for (url,) in rows:
@@ -225,7 +234,7 @@ def update_csv():
         """)
         rows = cursor.fetchall()
         headers = [desc[0] for desc in cursor.description]
-    
+
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(headers)
@@ -234,63 +243,84 @@ def update_csv():
 def archive_track(title):
     """Takes a title, searches for the track, then moves it to archive"""
     today = date.today().isoformat()
-    with sqlite3.connect(DB_PATH) as conn:
-        # Search for track by title (case-insensitive partial match)
-        cursor = conn.execute(
-            """
-            SELECT youtube_url, title
-            FROM tracks
-            WHERE title LIKE ? AND available = 1 AND archived = 0
-            """, (f"%{title}%",)
-        )
-        results = cursor.fetchall()
-        if len(results) == 0:
-            print(f"No available tracks found matching: {title}")
-            return False
-        if len(results) > 1:
-            print(f"Multiple tracks found matching '{title}':")
-            for i, (url, track_title) in enumerate(results, 1):
-                print(f"  {i}. {track_title}")
-            print("Please be more specific.")
-            return False
+    results = list(MUSIC_DIR.glob(f"*{title}*"))
+    if not results:
+        print(f"No available tracks found matching: {title}")
+        return
 
-        url, track_title = results[0]
-        video_id = url.split("v=")[-1].split("&")[0]
-        matching_files = list(MUSIC_DIR.glob(f"*{video_id}*"))
-        if not matching_files:
-            print(f"File not found for: {track_title}")
-            return False
-        
-        # Move file to archive
-        source_file = matching_files[0]
-        dest_file = ARCHIVE_DIR / source_file.name
-        
+    # prompt for confirmation before moving to archive
+    for src_file in results:
+        print(f"Archive {src_file}? (y/n)")
+        if not input().lower() == "y":
+            print(f"Skipped archiving {src_file}")
+            continue
+        dest_file = ARCHIVE_DIR / src_file.name
         try:
-            shutil.move(str(source_file), str(dest_file))
-            print(f"Archived: {track_title}")
-            
-            # Update database
+            shutil.move(str(src_file), str(dest_file))
+            print(f"Archived: {src_file}")
+            update_availability()
+            update_csv()
+        except Exception as e:
+            print(f"Failed to archive {src_file}: {e}")
+            continue
+
+        # update database
+        id = title_to_id(src_file)
+        url = id_to_url(id)
+        with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
                 """
-                UPDATE tracks
-                SET available = 0, archived = 1, date_archived = ?
+                UPDATE tracks SET archived = 1, date_archived = ?
                 WHERE youtube_url = ?
                 """, (today, url)
             )
-            
-            return True
-            
+
+def delete_track(title):
+    """
+    Delete a track from the database. 
+    This should also mark it as deleted in the database...
+    """
+    today = date.today().isoformat()
+    results = list(MUSIC_DIR.glob(f"*{title}*")) + list(ARCHIVE_DIR.glob(f"*{title}*"))
+    if not results:
+        print(f"No available tracks found matching: {title}")
+        return
+
+    # prompt for confirmation before deleting
+    for result in results:
+        print(f"Delete {result}? (y/n)")
+        if not input().lower() == "y":
+            print(f"Skipped deleting {result}")
+            continue
+        try:
+            result.unlink()
+            print(f"Deleted: {result}")
         except Exception as e:
-            print(f"Failed to archive {track_title}: {e}")
-            return False
+            print(f"Failed to delete {result}: {e}")
+            continue
+
+        # update database
+        id = title_to_id(result)
+        url = id_to_url(id)
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                UPDATE tracks SET deleted = 1, date_deleted = ?
+                WHERE youtube_url = ?
+                """, (today, url)
+            )
 
 def main(args):
     if (title := args.archive):
         archive_track(title)
         return
 
+    if (title := args.delete):
+        delete_track(title)
+        return
+
     print(f"🎵 Running music_warehouse at {datetime.now().isoformat()}")
-    if run_today():
+    if run_today() and not args.debug:
        print(f"✅ music_warehouse already ran today; skipping.\n")
        return 
 
@@ -311,8 +341,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description = "Sync YT Music Replay Mix")
-    parser.add_argument(
-        "-a", "--archive", type = str, help = "Title of track to archive"
-    )
+    parser.add_argument("-a", "--archive", type = str, help = "Title of track to archive")
+    parser.add_argument("-d", "--delete", type = str, help = "Title of track to delete")
+    parser.add_argument("-D", "--debug", action = "store_true", help = "Debug mode: Always run")
     args = parser.parse_args()
     main(args)
